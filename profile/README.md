@@ -40,7 +40,7 @@ Lite LLM is not only a model architecture—it is a runtime system:
 
 ---
 
-## Repositories (recommended layout)
+## Repositories 
 
 ### Specifications (authoritative)
 - `lite-llm-specs` — Enterprise Runtime Engineering Specification Corpus (SPEC‑001…SPEC‑060)
