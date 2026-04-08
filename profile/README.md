@@ -131,7 +131,7 @@ Changes to the corpus should go through the RFC process:
 
 ## License
 
-Each repository specifies its own license. If unspecified, consider it **all rights reserved** until a license is added.
+The Lite LLM Platform is distributed under the Dust Open Source License. Refer the included LICENSE file on a per repository basis.
 
 ---
 
