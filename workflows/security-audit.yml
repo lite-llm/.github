@@ -1,0 +1,163 @@
+# Security Audit Workflow for lite-llm platform
+# Runs cargo-audit for advisory checks and cargo-deny for license/dependency checks
+# Triggered weekly and on Cargo.lock changes
+
+name: Security Audit
+
+on:
+  schedule:
+    # Run every Sunday at 00:00 UTC
+    - cron: "0 0 * * 0"
+  push:
+    paths:
+      - "Cargo.lock"
+      - "**/Cargo.lock"
+  workflow_dispatch:
+
+# Cancel duplicate runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CRATES: "lite-llm-security lite-llm-distributed lite-llm-storage lite-llm-inference lite-llm-training lite-llm-runtime lite-llm"
+
+jobs:
+  # ─────────────────────────────────────────────
+  # cargo-audit — check for known vulnerabilities
+  # ─────────────────────────────────────────────
+  cargo-audit:
+    name: Cargo Audit (Advisories)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-audit-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-audit-registry-
+
+      # Install cargo-audit for vulnerability scanning
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # Run audit on each crate's Cargo.lock
+      # Note: If there's a root Cargo.lock, that takes priority
+      - name: Run cargo audit
+        run: |
+          echo "🔒 Scanning for known vulnerabilities..."
+          
+          # Check for root-level Cargo.lock first
+          if [ -f "Cargo.lock" ]; then
+            echo "Scanning root Cargo.lock..."
+            cargo audit || echo "⚠️ Advisory found (non-blocking)"
+          else
+            # Check each crate individually
+            for crate in $CRATES; do
+              echo "Scanning $crate/Cargo.lock..."
+              if [ -f "$crate/Cargo.lock" ]; then
+                cd "$crate"
+                cargo audit 2>&1 || echo "⚠️ Advisory found in $crate (non-blocking)"
+                cd ..
+              fi
+            done
+          fi
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-report
+          path: |
+            **/target/audit/
+          retention-days: 30
+
+  # ─────────────────────────────────────────────
+  # cargo-deny — license and dependency policy
+  # ─────────────────────────────────────────────
+  cargo-deny:
+    name: Cargo Deny (Licenses & Policies)
+    runs-on: ubuntu-latest
+    # Only run if deny.toml exists in the repository
+    if: ${{ hashFiles('deny.toml') != '' || hashFiles('.github/deny.toml') != '' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-deny-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-deny-registry-
+
+      # Install cargo-deny for license/policy checking
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      # Run cargo-deny if configuration exists
+      - name: Run cargo deny check
+        run: |
+          echo "📋 Checking dependency policies..."
+          
+          if [ -f "deny.toml" ]; then
+            cargo deny check 2>&1 || echo "⚠️ Policy violation found (non-blocking)"
+          elif [ -f ".github/deny.toml" ]; then
+            cargo deny check -c .github/deny.toml 2>&1 || echo "⚠️ Policy violation found (non-blocking)"
+          else
+            echo "ℹ️ No deny.toml found, skipping"
+          fi
+
+      - name: Upload deny report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deny-report
+          path: |
+            **/target/deny/
+          retention-days: 30
+
+  # ─────────────────────────────────────────────
+  # Summary job — aggregate results
+  # ─────────────────────────────────────────────
+  summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [cargo-audit, cargo-deny]
+    if: always()
+
+    steps:
+      - name: Generate security summary
+        run: |
+          echo "## 🔒 Security Audit Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cargo Audit**: ${{ needs.cargo-audit.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cargo Deny**: ${{ needs.cargo-deny.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Run date: $(date -u)" >> $GITHUB_STEP_SUMMARY

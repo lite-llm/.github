@@ -1,0 +1,248 @@
+# Nightly Integration Tests for lite-llm platform
+# Uses Rust nightly toolchain with Miri for undefined behavior detection
+# Runs daily at 00:00 UTC and can be triggered manually
+
+name: Nightly Tests
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      miri:
+        description: "Run Miri checks"
+        type: boolean
+        default: true
+      sanitizers:
+        description: "Run with sanitizers"
+        type: boolean
+        default: false
+
+# Cancel duplicate runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CRATES: "lite-llm-security lite-llm-distributed lite-llm-storage lite-llm-inference lite-llm-training lite-llm-runtime lite-llm"
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Miri — undefined behavior detection
+  # ─────────────────────────────────────────────
+  miri:
+    name: Miri (Undefined Behavior)
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.miri != 'false' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Install Rust nightly with Miri component
+      - name: Install Rust nightly with Miri
+        run: |
+          rustup toolchain install nightly --component miri
+          rustup override set nightly
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-nightly-miri-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-nightly-miri-registry-
+
+      # Setup Miri
+      - name: Setup Miri
+        run: cargo +nightly miri setup
+
+      # Run Miri on each crate
+      - name: Run Miri tests
+        run: |
+          echo "🔍 Running Miri undefined behavior checks..."
+          
+          MIRI_ERRORS=0
+          
+          for crate in $CRATES; do
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Testing $crate with Miri..."
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            cd "$crate"
+            
+            # Run Miri with default flags
+            # MIRIFLAGS controls what Miri checks for
+            if cargo +nightly miri test --all-features 2>&1; then
+              echo "✓ $crate passed Miri checks"
+            else
+              echo "⚠️ $crate has potential undefined behavior"
+              MIRI_ERRORS=$((MIRI_ERRORS + 1))
+            fi
+            
+            cd ..
+          done
+          
+          # Summary
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Miri Summary:"
+          echo "  Total crates: ${#CRATES[@]}"
+          echo "  Failed: $MIRI_ERRORS"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Don't fail the workflow — Miri findings are informational
+          # But log the count for monitoring
+          echo "miri_errors=$MIRI_ERRORS" >> $GITHUB_ENV
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-strict-provenance"
+
+      - name: Upload Miri results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miri-results
+          path: |
+            **/target/miri/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # Sanitizers — memory/thread/UB checks
+  # ─────────────────────────────────────────────
+  sanitizers:
+    name: Sanitizers (Memory/Thread/UB)
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.sanitizers == 'true' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Install Rust nightly with special components for sanitizers
+      - name: Install Rust nightly
+        run: |
+          rustup toolchain install nightly
+          rustup override set nightly
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-nightly-sanitizer-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-nightly-sanitizer-registry-
+
+      # Install cargo-sanitizer if available
+      - name: Install sanitizer tools
+        run: |
+          # AddressSanitizer is built into LLVM, available via RUSTFLAGS
+          echo "RUSTFLAGS=-Zsanitizer=address" >> $GITHUB_ENV
+          echo "ASAN_OPTIONS=detect_leaks=1" >> $GITHUB_ENV
+
+      # Run tests with AddressSanitizer
+      - name: Run tests with AddressSanitizer
+        run: |
+          echo "🔒 Running tests with AddressSanitizer..."
+          
+          for crate in $CRATES; do
+            echo "Testing $crate with ASan..."
+            cd "$crate"
+            
+            # Run tests with sanitizer enabled
+            # Note: Requires nightly and special flags
+            RUSTFLAGS="-Zsanitizer=address" cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --all-features 2>&1 || echo "⚠️ ASan check failed for $crate"
+            
+            cd ..
+          done
+
+      - name: Upload sanitizer results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-results
+          path: |
+            **/target/sanitizer/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # Nightly tests — basic compile and test
+  # ─────────────────────────────────────────────
+  nightly-basic:
+    name: Nightly Basic Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-nightly-basic-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-nightly-basic-registry-
+
+      # Test compilation with nightly
+      - name: Check compilation with nightly
+        run: |
+          echo "🔨 Checking compilation with nightly..."
+          for crate in $CRATES; do
+            echo "Checking $crate..."
+            cd "$crate"
+            cargo +nightly check --all-features 2>&1 || exit 1
+            cd ..
+          done
+
+      # Run tests with nightly
+      - name: Run tests with nightly
+        run: |
+          echo "🧪 Running tests with nightly..."
+          for crate in $CRATES; do
+            echo "Testing $crate..."
+            cd "$crate"
+            cargo +nightly test --all-features 2>&1 || exit 1
+            cd ..
+          done
+
+  # ─────────────────────────────────────────────
+  # Summary — aggregate nightly test results
+  # ─────────────────────────────────────────────
+  summary:
+    name: Nightly Summary
+    runs-on: ubuntu-latest
+    needs: [miri, sanitizers, nightly-basic]
+    if: always()
+
+    steps:
+      - name: Generate nightly summary
+        run: |
+          echo "## 🌙 Nightly Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Run date:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Miri | ${{ needs.miri.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Sanitizers | ${{ needs.sanitizers.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Nightly Basic | ${{ needs.nightly-basic.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Notes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Miri checks for undefined behavior in unsafe code" >> $GITHUB_STEP_SUMMARY
+          echo "- Sanitizers detect memory safety issues at runtime" >> $GITHUB_STEP_SUMMARY
+          echo "- Nightly basic tests ensure forward compatibility" >> $GITHUB_STEP_SUMMARY

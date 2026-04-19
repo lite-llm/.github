@@ -1,0 +1,118 @@
+# Auto-label PRs for lite-llm platform
+# Automatically labels PRs based on which files were changed
+# Triggered on pull_request_target for security
+
+name: PR Auto-Label
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    name: Auto-label PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Label based on changed files using the labeler action
+      - name: Apply labels based on changed files
+        uses: actions/labeler@v5
+        with:
+          repo-token: "${{ secrets.GITHUB_TOKEN }}"
+          sync-labels: true
+
+      # Alternative: Manual labeling with custom logic
+      - name: Analyze changed files
+        id: changes
+        run: |
+          # Get list of changed files from the PR
+          # This uses the GitHub API to fetch the PR files
+          CHANGED_FILES=$(curl -s \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            | jq -r '.[].filename')
+          
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          
+          # Initialize label arrays
+          LABELS_TO_ADD=""
+          
+          # Check for security-related changes
+          if echo "$CHANGED_FILES" | grep -q "lite-llm-security/"; then
+            LABELS_TO_ADD="${LABELS_TO_ADD}security,"
+          fi
+          
+          # Check for distributed systems changes
+          if echo "$CHANGED_FILES" | grep -q "lite-llm-distributed/"; then
+            LABELS_TO_ADD="${LABELS_TO_ADD}distributed,"
+          fi
+          
+          # Check for storage changes
+          if echo "$CHANGED_FILES" | grep -q "lite-llm-storage/"; then
+            LABELS_TO_ADD="${LABELS_TO_ADD}storage,"
+          fi
+          
+          # Check for inference changes
+          if echo "$CHANGED_FILES" | grep -q "lite-llm-inference/"; then
+            LABELS_TO_ADD="${LABELS_TO_ADD}inference,"
+          fi
+          
+          # Check for training changes
+          if echo "$CHANGED_FILES" | grep -q "lite-llm-training/"; then
+            LABELS_TO_ADD="${LABELS_TO_ADD}training,"
+          fi
+          
+          # Check for runtime changes
+          if echo "$CHANGED_FILES" | grep -q "lite-llm-runtime/"; then
+            LABELS_TO_ADD="${LABELS_TO_ADD}runtime,"
+          fi
+          
+          # Check for main binary changes
+          if echo "$CHANGED_FILES" | grep -q "lite-llm/"; then
+            LABELS_TO_ADD="${LABELS_TO_ADD}core,"
+          fi
+          
+          # Check for documentation changes
+          if echo "$CHANGED_FILES" | grep -qE "(docs/|lite-llm-docs/|\.md$)"; then
+            LABELS_TO_ADD="${LABELS_TO_ADD}documentation,"
+          fi
+          
+          # Check for CI/workflow changes
+          if echo "$CHANGED_FILES" | grep -q ".github/workflows/"; then
+            LABELS_TO_ADD="${LABELS_TO_ADD}ci,"
+          fi
+          
+          # Check for dependency changes
+          if echo "$CHANGED_FILES" | grep -q "Cargo.lock"; then
+            LABELS_TO_ADD="${LABELS_TO_ADD}dependencies,"
+          fi
+          
+          # Remove trailing comma
+          LABELS_TO_ADD="${LABELS_TO_ADD%,}"
+          
+          echo "labels=$LABELS_TO_ADD" >> $GITHUB_OUTPUT
+          echo "Labels to add: $LABELS_TO_ADD"
+
+      # Apply the labels
+      - name: Apply labels
+        if: steps.changes.outputs.labels != ''
+        run: |
+          IFS=',' read -ra LABELS <<< "${{ steps.changes.outputs.labels }}"
+          
+          for label in "${LABELS[@]}"; do
+            echo "Adding label: $label"
+            # Use GitHub CLI to add label
+            gh pr edit ${{ github.event.pull_request.number }} --add-label "$label" 2>/dev/null || \
+            echo "⚠️ Failed to add label: $label (may not exist)"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,177 @@
+# Dependabot configuration for lite-llm platform
+# Automated dependency updates for cargo and GitHub Actions
+
+version: 2
+
+updates:
+  # ─────────────────────────────────────────────
+  # Cargo dependencies (Rust)
+  # ─────────────────────────────────────────────
+  - package-ecosystem: "cargo"
+    directory: "/lite-llm"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "00:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "rust"
+    reviewers:
+      - "lite-llm/maintainers"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Group related updates together
+    groups:
+      tokio-ecosystem:
+        patterns:
+          - "tokio*"
+          - "tokio-*"
+      serde-ecosystem:
+        patterns:
+          - "serde*"
+          - "serde_*"
+      aws-ecosystem:
+        patterns:
+          - "aws-*"
+          - "aws_*"
+    ignore:
+      # Ignore major version updates that may break compatibility
+      - dependency-name: "cudarc"
+        update-types: ["version-update:semver-major"]
+
+  # lite-llm-runtime crate
+  - package-ecosystem: "cargo"
+    directory: "/lite-llm-runtime"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "00:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
+      - "runtime"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # lite-llm-security crate
+  - package-ecosystem: "cargo"
+    directory: "/lite-llm-security"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "00:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
+      - "security"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    ignore:
+      # Don't auto-update cryptography packages without review
+      - dependency-name: "aes-gcm"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "ed25519-dalek"
+        update-types: ["version-update:semver-major"]
+
+  # lite-llm-distributed crate
+  - package-ecosystem: "cargo"
+    directory: "/lite-llm-distributed"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "00:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
+      - "distributed"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      grpc-ecosystem:
+        patterns:
+          - "tonic*"
+          - "tonic-*"
+          - "prost*"
+
+  # lite-llm-storage crate
+  - package-ecosystem: "cargo"
+    directory: "/lite-llm-storage"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "00:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
+      - "storage"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # lite-llm-inference crate
+  - package-ecosystem: "cargo"
+    directory: "/lite-llm-inference"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "00:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
+      - "inference"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # lite-llm-training crate
+  - package-ecosystem: "cargo"
+    directory: "/lite-llm-training"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "00:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
+      - "training"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # ─────────────────────────────────────────────
+  # GitHub Actions
+  # ─────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "00:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    reviewers:
+      - "lite-llm/maintainers"
+    commit-message:
+      prefix: "ci"
+      include: "scope"

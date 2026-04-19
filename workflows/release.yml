@@ -1,0 +1,241 @@
+# Release Workflow for lite-llm platform
+# Triggered on version tags (v*), builds release binaries, runs tests, creates GitHub Release
+# Optionally publishes crates to crates.io (gated by secret)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# No concurrency cancellation for releases — we want every tag processed
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CRATES: "lite-llm-security lite-llm-distributed lite-llm-storage lite-llm-inference lite-llm-training lite-llm-runtime lite-llm"
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Verify tag and extract version
+  # ─────────────────────────────────────────────
+  verify:
+    name: Verify Release Tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract-version.outputs.version }}
+      crate-name: ${{ steps.extract-version.outputs.crate-name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: extract-version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "crate-name=lite-llm" >> $GITHUB_OUTPUT
+          echo "📦 Release version: $VERSION"
+
+  # ─────────────────────────────────────────────
+  # Build release binaries for multiple targets
+  # ─────────────────────────────────────────────
+  build-release:
+    name: Build Release (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact-name: lite-llm-linux-amd64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact-name: lite-llm-linux-amd64-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact-name: lite-llm-linux-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-release-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-registry-
+
+      # Install cross-compilation tools if needed
+      - name: Install cross-compilation tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      # Build release binary
+      - name: Build release binary
+        run: |
+          echo "🔨 Building release for ${{ matrix.target }}..."
+          cd lite-llm
+          cargo build --release --target ${{ matrix.target }} --bin lite-llm
+
+      # Run tests in release mode to catch release-specific issues
+      - name: Run tests in release mode
+        run: |
+          echo "🧪 Running release-mode tests..."
+          for crate in $CRATES; do
+            echo "Testing $crate in release mode..."
+            cd "$crate"
+            cargo test --release --all-features 2>&1 || exit 1
+            cd ..
+          done
+
+      # Package the binary
+      - name: Package binary
+        run: |
+          mkdir -p release-artifacts
+          BIN_PATH="lite-llm/target/${{ matrix.target }}/release/lite-llm"
+          if [ -f "$BIN_PATH" ]; then
+            cp "$BIN_PATH" "release-artifacts/lite-llm-${{ matrix.target }}"
+            chmod +x "release-artifacts/lite-llm-${{ matrix.target }}"
+            echo "✓ Binary packaged: lite-llm-${{ matrix.target }}"
+          else
+            echo "⚠️ Binary not found at $BIN_PATH"
+            exit 1
+          fi
+
+      # Upload release artifact
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: release-artifacts/
+          retention-days: 5
+
+  # ─────────────────────────────────────────────
+  # Create GitHub Release with assets
+  # ─────────────────────────────────────────────
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [verify, build-release]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Download all release binaries
+      - name: Download release binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts/
+
+      # Generate changelog from git tags
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "## Changes since $PREVIOUS_TAG" > CHANGELOG.md
+            git log "$PREVIOUS_TAG"..HEAD --pretty=format:"- %s (%h)" >> CHANGELOG.md
+          else
+            echo "## Initial Release" > CHANGELOG.md
+            git log --pretty=format:"- %s (%h)" >> CHANGELOG.md
+          fi
+          cat CHANGELOG.md
+
+      # Create GitHub Release
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "lite-llm ${{ github.ref_name }}"
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+          files: |
+            release-artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─────────────────────────────────────────────
+  # Publish crates to crates.io (optional, gated)
+  # ─────────────────────────────────────────────
+  publish-crates:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: [verify, create-release]
+    # Only run if the secret is configured
+    if: ${{ secrets.CRATES_IO_TOKEN != '' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-publish-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-publish-registry-
+
+      # Publish crates in dependency order
+      - name: Publish crates to crates.io
+        run: |
+          echo "📦 Publishing crates to crates.io..."
+          
+          # Login to crates.io
+          cargo registry -l crates.io ${{ secrets.CRATES_IO_TOKEN }}
+          
+          # Publish in dependency order (leaves first, root last)
+          PUBLISH_ORDER=(
+            "lite-llm-runtime"
+            "lite-llm-security"
+            "lite-llm-storage"
+            "lite-llm-inference"
+            "lite-llm-training"
+            "lite-llm-distributed"
+            "lite-llm"
+          )
+          
+          for crate in "${PUBLISH_ORDER[@]}"; do
+            echo "Publishing $crate..."
+            cd "$crate"
+            
+            # Only publish if version matches the tag
+            CRATE_VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+            
+            if [ "$CRATE_VERSION" = "$TAG_VERSION" ]; then
+              cargo publish --allow-dirty 2>&1 || echo "⚠️ Failed to publish $crate (may already exist)"
+            else
+              echo "⚠️ Version mismatch: crate=$CRATE_VERSION, tag=$TAG_VERSION, skipping"
+            fi
+            
+            cd ..
+          done
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}

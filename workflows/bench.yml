@@ -1,0 +1,106 @@
+# Benchmark Workflow for lite-llm platform
+# Runs weekly on schedule and can be triggered manually
+# Executes cargo bench on all crates and uploads results
+
+name: Benchmarks
+
+on:
+  schedule:
+    # Run every Monday at 00:00 UTC
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      crates:
+        description: "Comma-separated list of crates to benchmark (leave empty for all)"
+        required: false
+        default: ""
+
+# Cancel duplicate runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CRATES: "lite-llm-security lite-llm-distributed lite-llm-storage lite-llm-inference lite-llm-training lite-llm-runtime lite-llm"
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-bench-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-registry-
+
+      - name: Cache cargo build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/target
+          key: ${{ runner.os }}-bench-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-target-
+
+      # Determine which crates to benchmark
+      - name: Set benchmark crates
+        id: set-crates
+        run: |
+          if [ -n "${{ github.event.inputs.crates }}" ]; then
+            echo "crates=${{ github.event.inputs.crates }}" >> $GITHUB_OUTPUT
+          else
+            echo "crates=$CRATES" >> $GITHUB_OUTPUT
+          fi
+
+      # Run benchmarks for each crate that has bench targets
+      - name: Run benchmarks
+        run: |
+          mkdir -p benchmark-results
+          for crate in ${{ steps.set-crates.outputs.crates }}; do
+            echo "⏱️ Running benchmarks for: $crate"
+            cd "$crate"
+            
+            # Only run if the crate has a [[bench]] section
+            if grep -q '\[\[bench\]\]' Cargo.toml; then
+              echo "  ✓ Has bench targets, running..."
+              cargo bench --all-features 2>&1 | tee ../benchmark-results/${crate}-bench.txt || echo "⚠️ Bench failed for $crate (non-blocking)"
+            else
+              echo "  ℹ️ No bench targets found, skipping"
+            fi
+            
+            cd ..
+          done
+
+      # Upload benchmark results as artifact
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: benchmark-results/
+          retention-days: 30
+
+      # Store criterion HTML reports if they exist
+      - name: Upload criterion reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-reports-${{ github.run_id }}
+          path: |
+            **/target/criterion/
+          retention-days: 30

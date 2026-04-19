@@ -1,0 +1,110 @@
+# Codecov configuration for lite-llm platform
+# Defines coverage thresholds and reporting behavior
+
+codecov:
+  require_ci_to_pass: true
+  notify:
+    wait_for_ci: true
+    after_n_builds: 1
+
+# Coverage thresholds
+coverage:
+  precision: 2
+  round: down
+  range: "70...100"
+  
+  status:
+    # Overall project coverage
+    project:
+      default:
+        target: 80%
+        threshold: 5%
+        if_not_found: success
+        if_ci_failed: error
+    
+    # Patch coverage (only new code in PR)
+    patch:
+      default:
+        target: 80%
+        threshold: 5%
+        informational: true
+    
+    # Individual crate coverage tracking
+    project:
+      lite-llm-runtime:
+        target: 80%
+        paths:
+          - lite-llm-runtime/
+        informational: true
+      
+      lite-llm-security:
+        target: 85%
+        paths:
+          - lite-llm-security/
+        informational: true
+      
+      lite-llm-distributed:
+        target: 75%
+        paths:
+          - lite-llm-distributed/
+        informational: true
+      
+      lite-llm-storage:
+        target: 75%
+        paths:
+          - lite-llm-storage/
+        informational: true
+      
+      lite-llm-inference:
+        target: 75%
+        paths:
+          - lite-llm-inference/
+        informational: true
+      
+      lite-llm-training:
+        target: 75%
+        paths:
+          - lite-llm-training/
+        informational: true
+      
+      lite-llm:
+        target: 70%
+        paths:
+          - lite-llm/
+        informational: true
+
+# Comment configuration for PRs
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: true
+  require_base: false
+  require_head: true
+  hide_project_coverage: false
+
+# Ignore certain paths from coverage
+ignore:
+  - "tests/**/*"
+  - "**/tests/**/*"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "lite-llm-docs/**/*"
+  - ".github/**/*"
+
+# Flags for different test types
+flags:
+  unit-tests:
+    paths:
+      - lite-llm-runtime/
+      - lite-llm-security/
+      - lite-llm-distributed/
+      - lite-llm-storage/
+      - lite-llm-inference/
+      - lite-llm-training/
+      - lite-llm/
+    carryforward: true
+  
+  integration-tests:
+    paths:
+      - lite-llm/
+    carryforward: true

@@ -1,0 +1,205 @@
+# Main CI Pipeline for lite-llm platform
+# Runs on every push to main, pull requests, and manual trigger
+# Tests all 7 crates individually across multiple OS targets
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel duplicate runs for the same PR or branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # List of all crates in the platform (no workspace Cargo.toml)
+  CRATES: "lite-llm-security lite-llm-distributed lite-llm-storage lite-llm-inference lite-llm-training lite-llm-runtime lite-llm"
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Check & Test — runs on ubuntu-latest
+  # ─────────────────────────────────────────────
+  check-and-test:
+    name: Check & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      # Cache cargo registry, index, and build artifacts for faster builds
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+          key: ${{ runner.os }}-cargo-bin-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bin-
+
+      # Install cargo-nextest for faster, more reliable test execution
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      # ── cargo check ──
+      - name: Check all crates
+        run: |
+          for crate in $CRATES; do
+            echo "🔍 Checking crate: $crate"
+            cd "$crate"
+            cargo check --all-features 2>&1 || exit 1
+            cd ..
+          done
+
+      # ── cargo test ──
+      - name: Test all crates with nextest
+        run: |
+          for crate in $CRATES; do
+            echo "🧪 Testing crate: $crate"
+            cd "$crate"
+            cargo nextest run --all-features 2>&1 || exit 1
+            cd ..
+          done
+
+      # Upload test results for later analysis
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            **/target/nextest/
+            **/target/debug/.fingerprint/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # Clippy — lint all crates
+  # ─────────────────────────────────────────────
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-clippy-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-clippy-registry-
+
+      - name: Run clippy on all crates
+        run: |
+          for crate in $CRATES; do
+            echo "📎 Running clippy on: $crate"
+            cd "$crate"
+            # Deny warnings in lib code, but allow in tests
+            cargo clippy --all-features -- -D warnings -A clippy::new-without-default 2>&1 || exit 1
+            cd ..
+          done
+
+  # ─────────────────────────────────────────────
+  # Formatting — verify code style
+  # ─────────────────────────────────────────────
+  fmt:
+    name: Check Formatting
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Run cargo fmt check on all crates
+        run: |
+          for crate in $CRATES; do
+            echo "🎨 Checking formatting: $crate"
+            cd "$crate"
+            cargo fmt -- --check 2>&1 || exit 1
+            cd ..
+          done
+
+  # ─────────────────────────────────────────────
+  # Documentation — build docs for all crates
+  # ─────────────────────────────────────────────
+  doc:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-doc-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-doc-registry-
+
+      - name: Build documentation for all crates
+        run: |
+          for crate in $CRATES; do
+            echo "📚 Building docs: $crate"
+            cd "$crate"
+            cargo doc --no-deps --all-features 2>&1 || exit 1
+            cd ..
+          done
+
+      - name: Upload documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: crate-docs
+          path: |
+            **/target/doc/
+          retention-days: 14
