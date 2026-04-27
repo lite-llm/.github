@@ -30,7 +30,7 @@ coverage:
         informational: true
     
     # Individual crate coverage tracking
-    project:
+    crates:
       lite-llm-runtime:
         target: 80%
         paths:

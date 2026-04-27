@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # List of all crates in the platform (no workspace Cargo.toml)
+  # List of all crates in the platform (workspace exists but individual builds for isolation)
   CRATES: "lite-llm-security lite-llm-distributed lite-llm-storage lite-llm-inference lite-llm-training lite-llm-runtime lite-llm"
 
 jobs:
@@ -203,3 +203,61 @@ jobs:
           path: |
             **/target/doc/
           retention-days: 14
+
+  # ─────────────────────────────────────────────
+  # Coverage — run code coverage with tarpaulin
+  # ─────────────────────────────────────────────
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-coverage-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-coverage-registry-
+
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin
+
+      - name: Generate coverage report
+        run: |
+          mkdir -p coverage-reports
+          for crate in $CRATES; do
+            echo "📊 Generating coverage: $crate"
+            cd "$crate"
+            cargo tarpaulin --outfile ./../coverage-reports/$crate.xml --xml -p . 2>&1
+            cd ..
+          done
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: coverage-reports/
+          retention-days: 14
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          directory: ./coverage-reports/
+          flags: unittests
+          name: lite-llm-coverage
+          fail_ci_if_error: false
+          verbose: true
